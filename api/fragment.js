@@ -52,7 +52,7 @@ export default async function handler(req, res) {
     });
 
     // 🖼 Base Template
-    const templateURL = "https://i.ibb.co/S7MfSYQX/Untitled7-20251102195656.png";
+    const templateURL = "https://i.ibb.co/qFW35Nn2/x.jpg";
     const base = await loadImage(templateURL);
     const width = base.width;
     const height = base.height;
