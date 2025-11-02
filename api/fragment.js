@@ -1,80 +1,132 @@
 import fetch from "node-fetch";
 import * as cheerio from "cheerio";
-import { createCanvas, loadImage, registerFont } from "canvas";
+import { createCanvas, loadImage } from "canvas";
 import FormData from "form-data";
 import fs from "fs";
+import path from "path";
 
 export default async function handler(req, res) {
-  try {
-    const { username } = req.query;
-    if (!username) {
-      return res.status(400).json({ error: "Missing ?username=" });
-    }
+  const { username } = req.query;
+  if (!username)
+    return res.status(400).json({ error: "Missing ?username=" });
 
-    const url = `https://fragment.com/username/${username.replace("@", "")}`;
+  try {
+    const cleanName = username.replace("@", "");
+    const url = `https://fragment.com/username/${cleanName}`;
     const response = await fetch(url);
     const html = await response.text();
     const $ = cheerio.load(html);
 
-    // ---- Extract basic data ----
-    const usernameText = $("span.tm-section-header-domain span.subdomain").text().trim() || `@${username}`;
-    const bid = $("div.table-cell-value").first().text().trim() || "N/A";
-    const status = $("span.tm-section-header-status").text().trim() || "N/A";
-    const webAddress = $('dl.tm-list-item:contains("Web Address") dd.tm-list-item-value').text().trim() || `t.me/${username}`;
-    const tonAddress = $('dl.tm-list-item:contains("TON Web 3.0 Address") dd.tm-list-item-value').text().trim() || `${username}.t.me`;
+    // Extract data
+    const usernameText =
+      $("span.tm-section-header-domain span.subdomain").text().trim() ||
+      `@${cleanName}`;
+    const currentBid =
+      $("div.table-cell-value").first().text().trim() || "N/A";
+    const status =
+      $("span.tm-section-header-status").text().trim() || "N/A";
+    const auctionEnd =
+      $("div.js-timer-wrap time").attr("datetime") ||
+      $("div.tm-section-countdown time").attr("datetime") ||
+      "N/A";
+    const webAddress =
+      $('dl.tm-list-item:contains("Web Address") dd.tm-list-item-value')
+        .text()
+        .trim() || `t.me/${cleanName}`;
+    const tonAddress =
+      $('dl.tm-list-item:contains("TON Web 3.0 Address") dd.tm-list-item-value')
+        .text()
+        .trim() || `${cleanName}.t.me`;
 
-    // ---- Generate Image Card ----
-    const templateURL = "https://i.ibb.co/qFW35Nn2/x.jpg";
+    // Bid history
+    const bidHistory = [];
+    $("table.tm-table tbody tr").each((i, el) => {
+      if (i < 3) {
+        const tds = $(el).find("td");
+        bidHistory.push({
+          price: $(tds[0]).text().trim(),
+          date: $(tds[1]).text().trim(),
+          from: $(tds[2]).text().trim(),
+        });
+      }
+    });
+
+    // 🖼 Base Template
+    const templateURL = "https://i.ibb.co/S7MfSYQX/Untitled7-20251102195656.png";
     const base = await loadImage(templateURL);
-
     const width = base.width;
     const height = base.height;
+
     const canvas = createCanvas(width, height);
     const ctx = canvas.getContext("2d");
-
     ctx.drawImage(base, 0, 0, width, height);
 
-    ctx.font = "bold 36px Arial";
-    ctx.fillStyle = "#FFFFFF";
+    // ✏️ Text Styles
+    ctx.fillStyle = "#ffffff";
     ctx.textAlign = "left";
+    ctx.font = "bold 38px Arial";
 
-    ctx.fillText(usernameText, 80, 80);
-    ctx.fillText(`Status: ${status}`, 80, 130);
-    ctx.fillText(`Min Bid: ${bid}`, 80, 180);
-    ctx.fillText(`Web: ${webAddress}`, 80, 230);
-    ctx.fillText(`TON: ${tonAddress}`, 80, 280);
+    // Header
+    ctx.fillText(usernameText, 80, 120);
 
-    // Save temporary image
-    const tmpFile = `/tmp/${username}.png`;
-    const out = fs.createWriteStream(tmpFile);
-    const stream = canvas.createPNGStream();
-    stream.pipe(out);
+    ctx.font = "28px Arial";
+    ctx.fillText(`Status: ${status}`, 80, 180);
+    ctx.fillText(`High Bid: ${currentBid}`, 80, 230);
+    ctx.fillText(`Ends: ${auctionEnd}`, 80, 280);
+    ctx.fillText(`Web: ${webAddress}`, 80, 330);
+    ctx.fillText(`TON: ${tonAddress}`, 80, 380);
 
-    await new Promise((resolve) => out.on("finish", resolve));
+    // 📜 Bid history (top 3)
+    ctx.font = "bold 32px Arial";
+    ctx.fillText("Top Bids:", 80, 450);
 
-    // ---- Upload to tmpfiles.org ----
+    ctx.font = "26px Arial";
+    bidHistory.forEach((b, i) => {
+      const y = 500 + i * 50;
+      ctx.fillText(`${i + 1}. ${b.price} - ${b.from}`, 100, y);
+    });
+
+    // Save image
+    const tmpPath = path.join("/tmp", `${Date.now()}-${cleanName}.jpg`);
+    const buffer = canvas.toBuffer("image/jpeg");
+    fs.writeFileSync(tmpPath, buffer);
+
+    // Upload to tmpfiles.org
     const formData = new FormData();
-    formData.append("file", fs.createReadStream(tmpFile));
+    formData.append("file", fs.createReadStream(tmpPath));
     const uploadRes = await fetch("https://tmpfiles.org/api/v1/upload", {
       method: "POST",
       body: formData,
+      headers: formData.getHeaders(),
     });
-    const uploadJson = await uploadRes.json();
-    const imageUrl = uploadJson?.data?.url || null;
+    const uploadData = await uploadRes.json();
+    fs.unlinkSync(tmpPath);
 
-    // ---- Respond ----
+    let imageUrl = null;
+    if (uploadData?.data?.url) {
+      const parts = uploadData.data.url.split("/").filter(Boolean);
+      const id = parts[2];
+      const file = parts[3];
+      imageUrl = `https://tmpfiles.org/dl/${id}/${file}`;
+    }
+
+    // 🧾 Final JSON Response
     return res.status(200).json({
       username: usernameText,
-      minimum_bid: bid,
+      current_high_bid: currentBid,
+      auction_end: auctionEnd,
       status,
       web_address: webAddress,
       ton_web3_address: tonAddress,
-      image: imageUrl,
+      bid_history: bidHistory,
+      image_url: imageUrl,
       source: url,
       developer: "https://t.me/TryToLiveAlone",
     });
-  } catch (error) {
-    return res.status(500).json({ error: error.message });
+  } catch (err) {
+    return res.status(500).json({
+      error: "Internal server error",
+      message: err.message,
+    });
   }
 }
-  
