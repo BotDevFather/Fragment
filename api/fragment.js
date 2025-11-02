@@ -1,9 +1,9 @@
-import { createCanvas, loadImage } from "@napi-rs/canvas";
+import sharp from "sharp";
+import fetch from "node-fetch";
+import * as cheerio from "cheerio";
 import fs from "fs";
 import path from "path";
 import FormData from "form-data";
-import fetch from "node-fetch";
-import * as cheerio from "cheerio";
 
 export default async function handler(req, res) {
   try {
@@ -11,14 +11,12 @@ export default async function handler(req, res) {
     const url = `https://fragment.com/username/${username}`;
     const baseImageUrl = "https://i.ibb.co/qFW35Nn2/x.jpg";
 
-    // 1️⃣ Fetch page HTML
-    const response = await fetch(url, {
-      headers: { "User-Agent": "Mozilla/5.0" },
-    });
+    // 1️⃣ Fetch and scrape the Fragment.com page
+    const response = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
     const html = await response.text();
     const $ = cheerio.load(html);
 
-    // 2️⃣ Scrape key data
+    // 2️⃣ Extract data
     const data = {
       username: `@${username}`,
       current_high_bid:
@@ -28,19 +26,18 @@ export default async function handler(req, res) {
         $(".js-timer-wrap time").attr("datetime") ||
         "Unknown",
       web_address:
-        $("dt:contains('Web Address')").next("dd").text().trim() || null,
+        $("dt:contains('Web Address')").next("dd").text().trim() || "N/A",
       ton_web3_address:
         $("dt:contains('TON Web 3.0 Address')")
           .next("dd")
           .text()
-          .trim() || null,
+          .trim() || "N/A",
       status: $(".tm-section-header-status").text().trim() || "Unknown",
       bid_history: [],
       source: url,
       developer: "https://t.me/TryToLiveAlone",
     };
 
-    // Bid history
     $("table.tm-table tbody tr").each((i, el) => {
       if (i < 5) {
         const tds = $(el).find("td");
@@ -52,40 +49,46 @@ export default async function handler(req, res) {
       }
     });
 
-    // 3️⃣ Draw on base template
-    const base = await loadImage(baseImageUrl);
-    const canvas = createCanvas(base.width, base.height);
-    const ctx = canvas.getContext("2d");
+    // 3️⃣ Generate SVG overlay (text)
+    const svg = `
+    <svg width="1280" height="720" xmlns="http://www.w3.org/2000/svg">
+      <style>
+        .username { font: 600 32px Arial; fill: #ffffff; }
+        .status { font: 600 23px Arial; fill: #5FE890; }
+        .bid { font: 700 24px Arial; fill: #ffffff; }
+        .label { font: 700 28px Arial; fill: #22A9D8; }
+        .bidHistory { font: 600 24px Arial; fill: #FFD700; }
+        .bidFrom { font: 500 20px Arial; fill: #AAAAAA; }
+        .footer { font: 400 22px Arial; fill: #CCCCCC; }
+      </style>
+      <text x="50" y="90" class="username">${username}.t.me</text>
+      <text x="300" y="80" class="status">${data.status}</text>
+      <text x="325" y="280" class="bid">${data.current_high_bid}</text>
+      <text x="1148" y="80" class="label">@${username}</text>
+      <text x="1090" y="180" class="label">${data.web_address}</text>
+      <text x="1090" y="270" class="label">${data.ton_web3_address}</text>
+      <text x="60" y="400" class="label">Recent Bids:</text>
+      ${data.bid_history
+        .slice(0, 3)
+        .map(
+          (b, i) => `
+          <text x="80" y="${440 + i * 70}" class="bidHistory">💰 ${b.price}</text>
+          <text x="80" y="${470 + i * 70}" class="bidFrom">From: ${b.from}</text>
+        `
+        )
+        .join("")}
+      <text x="50" y="690" class="footer">Developer: https://t.me/TryToLiveAlone</text>
+    </svg>
+    `;
 
-    // Background image
-    ctx.drawImage(base, 0, 0, base.width, base.height);
+    // 4️⃣ Combine base + overlay with Sharp
+    const baseBuffer = await (await fetch(baseImageUrl)).arrayBuffer();
+    const buffer = await sharp(Buffer.from(baseBuffer))
+      .composite([{ input: Buffer.from(svg), top: 0, left: 0 }])
+      .jpeg()
+      .toBuffer();
 
-    // Styles
-    ctx.fillStyle = "#FFFFFF";
-    ctx.font = "36px Arial";
-    ctx.textAlign = "left";
-
-    // Write main info
-    ctx.fillText(`Username: ${data.username}`, 50, 100);
-    ctx.fillText(`Status: ${data.status}`, 50, 150);
-    ctx.fillText(`High Bid: ${data.current_high_bid}`, 50, 200);
-    ctx.fillText(`Auction End: ${data.auction_end}`, 50, 250);
-
-    ctx.font = "28px Arial";
-    ctx.fillText("Recent Bids:", 50, 320);
-
-    data.bid_history.slice(0, 3).forEach((bid, i) => {
-      const y = 370 + i * 60;
-      ctx.fillText(`${bid.price} — ${bid.from}`, 70, y);
-      ctx.fillText(`${bid.date}`, 70, y + 30);
-    });
-
-    ctx.font = "22px Arial";
-    ctx.fillStyle = "#CCCCCC";
-    ctx.fillText(`Developer: https://t.me/TryToLiveAlone`, 50, base.height - 40);
-
-    // 4️⃣ Save temp and upload to tmpfiles.org
-    const buffer = await canvas.encode("jpeg");
+    // 5️⃣ Save temporarily and upload to tmpfiles.org
     const tempPath = path.join("/tmp", `fragment_${Date.now()}.jpg`);
     fs.writeFileSync(tempPath, buffer);
 
@@ -97,7 +100,6 @@ export default async function handler(req, res) {
       body: formData,
       headers: formData.getHeaders(),
     });
-
     const uploadData = await uploadRes.json();
     fs.unlinkSync(tempPath);
 
@@ -107,7 +109,7 @@ export default async function handler(req, res) {
       image_url = `https://tmpfiles.org/dl/${parts[2]}/${parts[3]}`;
     }
 
-    // 5️⃣ Final JSON output
+    // 6️⃣ Return JSON + image URL
     return res.status(200).json({
       status: "OK",
       ...data,
