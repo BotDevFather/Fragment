@@ -11,16 +11,15 @@ export default async function handler(req, res) {
     const url = `https://fragment.com/username/${username}`;
     const baseImageUrl = "https://i.ibb.co/qFW35Nn2/x.jpg";
 
-    // 1️⃣ Fetch and scrape the Fragment.com page
+    // 1️⃣ Fetch Fragment page
     const response = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
     const html = await response.text();
     const $ = cheerio.load(html);
 
-    // 2️⃣ Extract data
+    // 2️⃣ Scrape key data
     const data = {
       username: `@${username}`,
-      current_high_bid:
-        $(".table-cell-value").first().text().trim() || "Not found",
+      current_high_bid: $(".table-cell-value").first().text().trim() || "Not found",
       auction_end:
         $("time").attr("datetime") ||
         $(".js-timer-wrap time").attr("datetime") ||
@@ -49,9 +48,14 @@ export default async function handler(req, res) {
       }
     });
 
-    // 3️⃣ Generate SVG overlay (text)
+    // 3️⃣ Load base image and detect size
+    const baseBuffer = await (await fetch(baseImageUrl)).arrayBuffer();
+    const baseMeta = await sharp(Buffer.from(baseBuffer)).metadata();
+    const { width, height } = baseMeta;
+
+    // 4️⃣ Create SVG overlay using dynamic size
     const svg = `
-    <svg width="1280" height="720" xmlns="http://www.w3.org/2000/svg">
+    <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
       <style>
         .username { font: 600 32px Arial; fill: #ffffff; }
         .status { font: 600 23px Arial; fill: #5FE890; }
@@ -77,24 +81,23 @@ export default async function handler(req, res) {
         `
         )
         .join("")}
-      <text x="50" y="690" class="footer">Developer: https://t.me/TryToLiveAlone</text>
-    </svg>
-    `;
+      <text x="50" y="${height - 40}" class="footer">
+        Developer: https://t.me/TryToLiveAlone
+      </text>
+    </svg>`;
 
-    // 4️⃣ Combine base + overlay with Sharp
-    const baseBuffer = await (await fetch(baseImageUrl)).arrayBuffer();
+    // 5️⃣ Composite overlay
     const buffer = await sharp(Buffer.from(baseBuffer))
       .composite([{ input: Buffer.from(svg), top: 0, left: 0 }])
       .jpeg()
       .toBuffer();
 
-    // 5️⃣ Save temporarily and upload to tmpfiles.org
+    // 6️⃣ Save and upload to tmpfiles.org
     const tempPath = path.join("/tmp", `fragment_${Date.now()}.jpg`);
     fs.writeFileSync(tempPath, buffer);
 
     const formData = new FormData();
     formData.append("file", fs.createReadStream(tempPath));
-
     const uploadRes = await fetch("https://tmpfiles.org/api/v1/upload", {
       method: "POST",
       body: formData,
@@ -109,7 +112,7 @@ export default async function handler(req, res) {
       image_url = `https://tmpfiles.org/dl/${parts[2]}/${parts[3]}`;
     }
 
-    // 6️⃣ Return JSON + image URL
+    // 7️⃣ Final response
     return res.status(200).json({
       status: "OK",
       ...data,
@@ -122,4 +125,5 @@ export default async function handler(req, res) {
       developer: "https://t.me/TryToLiveAlone",
     });
   }
-}
+      }
+                                       
