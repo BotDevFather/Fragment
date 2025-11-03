@@ -75,7 +75,7 @@ export default async function handler(req, res) {
     drawText(data.ton_web3_address, 50, 90, 32, "#ffffff", "600");
     drawText(data.status, 300, 80, 23, "#5FE890", "600");
     drawText(data.current_high_bid, 325, 280, 24, "#ffffff", "700");
-    drawText(data.username, 1950, 80, 28, "#22A9D8", "600");
+    drawText(username, 1950, 80, 28, "#22A9D8", "600");
     drawText(data.web_address, 1055, 180, 28, "#22A9D8", "700");
     drawText(data.ton_web3_address, 1055, 270, 28, "#22A9D8", "600");
 
