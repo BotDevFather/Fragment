@@ -1,4 +1,3 @@
-                                       
 import sharp from "sharp";
 import fetch from "node-fetch";
 import * as cheerio from "cheerio";
@@ -12,12 +11,21 @@ export default async function handler(req, res) {
     const url = `https://fragment.com/username/${username}`;
     const baseImageUrl = "https://i.ibb.co/qFW35Nn2/x.jpg";
 
-    // 1️⃣ Fetch and scrape Fragment page
+    // --- Helper: Escape special chars for SVG ---
+    const escapeXML = (unsafe) =>
+      unsafe
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&apos;");
+
+    // 1️⃣ Fetch Fragment HTML
     const response = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
     const html = await response.text();
     const $ = cheerio.load(html);
 
-    // 2️⃣ Extract key data
+    // 2️⃣ Extract data
     const data = {
       username: `@${username}`,
       current_high_bid: $(".table-cell-value").first().text().trim() || "Not found",
@@ -45,12 +53,12 @@ export default async function handler(req, res) {
       }
     });
 
-    // 3️⃣ Load base image and detect size
+    // 3️⃣ Load base and get size
     const baseBuffer = await (await fetch(baseImageUrl)).arrayBuffer();
     const baseMeta = await sharp(Buffer.from(baseBuffer)).metadata();
     const { width, height } = baseMeta;
 
-    // 4️⃣ Build SVG overlay (Open Sans font from Google Fonts)
+    // 4️⃣ Build SVG safely with escaped text
     const svg = `
     <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
       <style>
@@ -65,20 +73,20 @@ export default async function handler(req, res) {
         .footer { font: 400 22px 'Open Sans'; fill: #CCCCCC; }
       </style>
 
-      <text x="50" y="90" class="username">${username}.t.me</text>
-      <text x="300" y="80" class="status">${data.status}</text>
-      <text x="325" y="280" class="bid">${data.current_high_bid}</text>
-      <text x="1148" y="80" class="label">@${username}</text>
-      <text x="1090" y="180" class="label">${data.web_address}</text>
-      <text x="1090" y="270" class="label">${data.ton_web3_address}</text>
+      <text x="50" y="90" class="username">${escapeXML(username)}.t.me</text>
+      <text x="300" y="80" class="status">${escapeXML(data.status)}</text>
+      <text x="325" y="280" class="bid">${escapeXML(data.current_high_bid)}</text>
+      <text x="1148" y="80" class="label">@${escapeXML(username)}</text>
+      <text x="1090" y="180" class="label">${escapeXML(data.web_address)}</text>
+      <text x="1090" y="270" class="label">${escapeXML(data.ton_web3_address)}</text>
 
       <text x="60" y="400" class="label">Recent Bids:</text>
       ${data.bid_history
         .slice(0, 3)
         .map(
           (b, i) => `
-            <text x="80" y="${440 + i * 70}" class="bidHistory">💰 ${b.price}</text>
-            <text x="80" y="${470 + i * 70}" class="bidFrom">From: ${b.from}</text>
+            <text x="80" y="${440 + i * 70}" class="bidHistory">💰 ${escapeXML(b.price)}</text>
+            <text x="80" y="${470 + i * 70}" class="bidFrom">From: ${escapeXML(b.from)}</text>
           `
         )
         .join("")}
@@ -88,25 +96,23 @@ export default async function handler(req, res) {
       </text>
     </svg>`;
 
-    // 5️⃣ Composite base image + SVG
+    // 5️⃣ Combine base + overlay
     const buffer = await sharp(Buffer.from(baseBuffer))
       .composite([{ input: Buffer.from(svg), top: 0, left: 0 }])
       .jpeg()
       .toBuffer();
 
-    // 6️⃣ Save and upload to tmpfiles.org
+    // 6️⃣ Save + upload
     const tempPath = path.join("/tmp", `fragment_${Date.now()}.jpg`);
     fs.writeFileSync(tempPath, buffer);
 
     const formData = new FormData();
     formData.append("file", fs.createReadStream(tempPath));
-
     const uploadRes = await fetch("https://tmpfiles.org/api/v1/upload", {
       method: "POST",
       body: formData,
       headers: formData.getHeaders(),
     });
-
     const uploadData = await uploadRes.json();
     fs.unlinkSync(tempPath);
 
@@ -116,7 +122,7 @@ export default async function handler(req, res) {
       image_url = `https://tmpfiles.org/dl/${parts[2]}/${parts[3]}`;
     }
 
-    // 7️⃣ Final JSON response
+    // 7️⃣ Output JSON
     return res.status(200).json({
       status: "OK",
       ...data,
