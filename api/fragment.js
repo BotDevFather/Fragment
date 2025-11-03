@@ -1,36 +1,35 @@
-import sharp from "sharp";
 import fs from "fs";
-import path, { dirname } from "path";
+import path from "path";
 import fetch from "node-fetch";
 import FormData from "form-data";
 import * as cheerio from "cheerio";
-import { fileURLToPath } from "url";
+import { createCanvas, loadImage, registerFont } from "canvas";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+const FONT_PATH = path.resolve("./fonts/OpenSans-Regular.ttf");
+registerFont(FONT_PATH, { family: "OpenSans" });
 
-const FONT_PATH = path.join(__dirname, "../OpenSans-Regular.ttf"); // <-- fixed
 const TEMPLATE_URL = "https://i.ibb.co/qFW35Nn2/x.jpg";
-
 
 export default async function handler(req, res) {
   try {
     const username = (req.query.username || "heartless").replace("@", "");
     const url = `https://fragment.com/username/${username}`;
 
-    // 🧠 Check font file
-    if (!fs.existsSync(FONT_PATH)) throw new Error("Font not found: " + FONT_PATH);
-    const fontBase64 = fs.readFileSync(FONT_PATH).toString("base64");
-
-    // 🧠 Fetch template image
+    // 🧠 Fetch template
     const imgRes = await fetch(TEMPLATE_URL);
     const imgBuffer = Buffer.from(await imgRes.arrayBuffer());
-    const meta = await sharp(imgBuffer).metadata();
-    const width = meta.width;
-    const height = meta.height;
+    const template = await loadImage(imgBuffer);
 
-    // 🧠 Scrape Fragment data
-    const pageResponse = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
+    const canvas = createCanvas(template.width, template.height);
+    const ctx = canvas.getContext("2d");
+
+    // Draw background
+    ctx.drawImage(template, 0, 0, template.width, template.height);
+
+    // 🧠 Scrape fragment data
+    const pageResponse = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0" },
+    });
     const html = await pageResponse.text();
     const $ = cheerio.load(html);
 
@@ -42,7 +41,8 @@ export default async function handler(req, res) {
         $(".js-timer-wrap time").attr("datetime") ||
         "Unknown",
       web_address: $("dt:contains('Web Address')").next("dd").text().trim() || "—",
-      ton_web3_address: $("dt:contains('TON Web 3.0 Address')").next("dd").text().trim() || "—",
+      ton_web3_address:
+        $("dt:contains('TON Web 3.0 Address')").next("dd").text().trim() || "—",
       status: $(".tm-section-header-status").text().trim() || "Unknown",
       bid_history: [],
       source: url,
@@ -60,74 +60,38 @@ export default async function handler(req, res) {
       }
     });
 
-    // 🧩 Text coordinates
-    const fields = [
-      { x: 50, y: 90, text: data.ton_web3_address, color: "#ffffff", size: 32, weight: "600" },
-      { x: 300, y: 80, text: data.status, color: "#5FE890", size: 23, weight: "600" },
-      { x: 325, y: 280, text: data.current_high_bid, color: "#ffffff", size: 24, weight: "700" },
-      { x: 1148, y: 80, text: data.username, color: "#22A9D8", size: 28, weight: "600" },
-      { x: 1090, y: 180, text: data.web_address, color: "#22A9D8", size: 28, weight: "700" },
-      { x: 1090, y: 270, text: data.ton_web3_address, color: "#22A9D8", size: 28, weight: "600" },
-    ];
+    // 🧩 Draw text
+    const drawText = (text, x, y, size, color, weight = "normal") => {
+      ctx.font = `${weight} ${size}px OpenSans`;
+      ctx.fillStyle = color;
+      ctx.fillText(text, x, y);
+    };
 
+    drawText(data.ton_web3_address, 50, 90, 32, "#ffffff", "600");
+    drawText(data.status, 300, 80, 23, "#5FE890", "600");
+    drawText(data.current_high_bid, 325, 280, 24, "#ffffff", "700");
+    drawText(data.username, 1148, 80, 28, "#22A9D8", "600");
+    drawText(data.web_address, 1090, 180, 28, "#22A9D8", "700");
+    drawText(data.ton_web3_address, 1090, 270, 28, "#22A9D8", "600");
+
+    // 🧩 Draw bid history
     let y = 370;
     for (const bid of data.bid_history) {
-      fields.push({
-        x: 70,
-        y,
-        text: `${bid.price} — ${bid.from}`,
-        color: "#FFD700",
-        size: 22,
-        weight: "600",
-      });
-      fields.push({
-        x: 70,
-        y: y + 25,
-        text: bid.date,
-        color: "#AAAAAA",
-        size: 20,
-        weight: "400",
-      });
+      drawText(`${bid.price} — ${bid.from}`, 70, y, 22, "#FFD700", "600");
+      drawText(bid.date, 70, y + 25, 20, "#AAAAAA", "400");
       y += 60;
     }
 
-    // 🧩 Escape XML
-    const escapeXml = (t) =>
-      String(t)
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&apos;");
-
-    // 🧩 Create SVG overlay with same size as image
-    const svg = `
-    <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
-      <style>
-        @font-face {
-          font-family: 'OpenSans';
-          src: url('data:font/ttf;base64,${fontBase64}') format('truetype');
-        }
-      </style>
-      ${fields
-        .map(
-          (f) =>
-            `<text x="${f.x}" y="${f.y}" font-family="OpenSans" font-size="${f.size}" font-weight="${f.weight}" fill="${f.color}">${escapeXml(f.text)}</text>`
-        )
-        .join("\n")}
-    </svg>`;
-
-    // 🧷 Combine the SVG overlay
-    const buffer = await sharp(imgBuffer)
-      .composite([{ input: Buffer.from(svg), top: 0, left: 0 }])
-      .png()
-      .toBuffer();
+    // 🧷 Export as PNG
+    const buffer = canvas.toBuffer("image/png");
 
     // ☁️ Upload to tmpfiles.org
     const tempPath = path.join("/tmp", `fragment_${Date.now()}.png`);
     fs.writeFileSync(tempPath, buffer);
+
     const formData = new FormData();
     formData.append("file", fs.createReadStream(tempPath));
+
     const uploadRes = await fetch("https://tmpfiles.org/api/v1/upload", {
       method: "POST",
       body: formData,
@@ -138,11 +102,12 @@ export default async function handler(req, res) {
 
     let image_url = null;
     if (uploadData?.data?.url) {
-      const parts = uploadData.data.url.split("/").filter(Boolean);
-      image_url = `https://tmpfiles.org/dl/${parts[2]}/${parts[3]}`;
+      image_url = uploadData.data.url.replace(
+        "tmpfiles.org/",
+        "tmpfiles.org/dl/"
+      );
     }
 
-    // ✅ Return JSON
     return res.status(200).json({
       status: "OK",
       ...data,
@@ -155,4 +120,4 @@ export default async function handler(req, res) {
       developer: "https://t.me/TryToLiveAlone",
     });
   }
-}
+                     }
