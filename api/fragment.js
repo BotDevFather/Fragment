@@ -5,17 +5,20 @@ import FormData from "form-data";
 import * as cheerio from "cheerio";
 import { createCanvas, loadImage, registerFont } from "canvas";
 
+// 🧩 Font registration
 const FONT_PATH = path.resolve("./fonts/OpenSans-Regular.ttf");
 registerFont(FONT_PATH, { family: "OpenSans" });
 
+// 🖼 Template image
 const TEMPLATE_URL = "https://i.ibb.co/qFW35Nn2/x.jpg";
 
 export default async function handler(req, res) {
   try {
+    // 💬 Always filled username
     const username = (req.query.username || "heartless").replace("@", "");
     const url = `https://fragment.com/username/${username}`;
 
-    // 🧠 Fetch template
+    // 🧠 Fetch and load background image
     const imgRes = await fetch(TEMPLATE_URL);
     const imgBuffer = Buffer.from(await imgRes.arrayBuffer());
     const template = await loadImage(imgBuffer);
@@ -23,10 +26,10 @@ export default async function handler(req, res) {
     const canvas = createCanvas(template.width, template.height);
     const ctx = canvas.getContext("2d");
 
-    // Draw background
+    // Draw base image
     ctx.drawImage(template, 0, 0, template.width, template.height);
 
-    // 🧠 Scrape fragment data
+    // 🧠 Scrape data from Fragment
     const pageResponse = await fetch(url, {
       headers: { "User-Agent": "Mozilla/5.0" },
     });
@@ -49,6 +52,7 @@ export default async function handler(req, res) {
       developer: "https://t.me/TryToLiveAlone",
     };
 
+    // 🧾 Extract bid history (first 3 entries)
     $("table.tm-table tbody tr").each((i, el) => {
       if (i < 3) {
         const tds = $(el).find("td");
@@ -60,13 +64,14 @@ export default async function handler(req, res) {
       }
     });
 
-    // 🧩 Draw text
+    // ✏️ Function to draw text
     const drawText = (text, x, y, size, color, weight = "normal") => {
       ctx.font = `${weight} ${size}px OpenSans`;
       ctx.fillStyle = color;
       ctx.fillText(text, x, y);
     };
 
+    // 🧩 Draw main info
     drawText(data.ton_web3_address, 50, 90, 32, "#ffffff", "600");
     drawText(data.status, 300, 80, 23, "#5FE890", "600");
     drawText(data.current_high_bid, 325, 280, 24, "#ffffff", "700");
@@ -74,7 +79,7 @@ export default async function handler(req, res) {
     drawText(data.web_address, 1055, 180, 28, "#22A9D8", "700");
     drawText(data.ton_web3_address, 1055, 270, 28, "#22A9D8", "600");
 
-    // 🧩 Draw bid history
+    // 📜 Draw bid history
     let y = 370;
     for (const bid of data.bid_history) {
       drawText(`${bid.price} — ${bid.from}`, 70, y, 22, "#FFD700", "600");
@@ -97,27 +102,27 @@ export default async function handler(req, res) {
       body: formData,
       headers: formData.getHeaders(),
     });
+
     const uploadData = await uploadRes.json();
     fs.unlinkSync(tempPath);
 
     let image_url = null;
     if (uploadData?.data?.url) {
-      image_url = uploadData.data.url.replace(
-        "tmpfiles.org/",
-        "tmpfiles.org/dl/"
-      );
+      image_url = uploadData.data.url.replace("tmpfiles.org/", "tmpfiles.org/dl/");
     }
 
+    // ✅ Return success
     return res.status(200).json({
       status: "OK",
       ...data,
       image_url,
     });
   } catch (err) {
+    // ❌ Handle error
     return res.status(500).json({
       status: "ERROR",
       message: err.message,
       developer: "https://t.me/TryToLiveAlone",
     });
   }
-                     }
+}
