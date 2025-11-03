@@ -12,16 +12,18 @@ export default async function handler(req, res) {
     const templateUrl = "https://i.ibb.co/qFW35Nn2/x.jpg";
     const fontUrl = "https://raw.githubusercontent.com/TryToLiveAlon/api-wrappe/main/fonts/OpenSans-Regular.ttf";
 
-    // 🧠 Fetch and cache font
-    const fontResponse = await fetch(fontUrl);
-    const fontBuffer = await fontResponse.arrayBuffer();
-    const fontBase64 = Buffer.from(fontBuffer).toString("base64");
+    // 🧠 Fetch assets
+    const [fontRes, imgRes] = await Promise.all([fetch(fontUrl), fetch(templateUrl)]);
+    const fontBuffer = Buffer.from(await fontRes.arrayBuffer());
+    const imgBuffer = Buffer.from(await imgRes.arrayBuffer());
+    const fontBase64 = fontBuffer.toString("base64");
 
-    // 🧠 Fetch template image
-    const templateResponse = await fetch(templateUrl);
-    const templateBuffer = Buffer.from(await templateResponse.arrayBuffer());
+    // 🧠 Get actual image size
+    const meta = await sharp(imgBuffer).metadata();
+    const width = meta.width;
+    const height = meta.height;
 
-    // 🧠 Scrape Fragment
+    // 🧠 Scrape data from Fragment
     const pageResponse = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
     const html = await pageResponse.text();
     const $ = cheerio.load(html);
@@ -52,15 +54,7 @@ export default async function handler(req, res) {
       }
     });
 
-    const escapeXml = (t) =>
-      String(t)
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&apos;");
-
-    // 🧩 SVG text layer
+    // 🧩 Text elements
     const fields = [
       { x: 50, y: 90, text: data.ton_web3_address, color: "#ffffff", size: 32, weight: "600" },
       { x: 300, y: 80, text: data.status, color: "#5FE890", size: 23, weight: "600" },
@@ -91,8 +85,18 @@ export default async function handler(req, res) {
       y += 60;
     }
 
+    // 🧩 Escape XML
+    const escapeXml = (t) =>
+      String(t)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&apos;");
+
+    // 🧩 Create SVG overlay with exact image size
     const svg = `
-    <svg width="1400" height="800" xmlns="http://www.w3.org/2000/svg">
+    <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
       <style>
         @font-face {
           font-family: 'OpenSans';
@@ -107,25 +111,23 @@ export default async function handler(req, res) {
         .join("\n")}
     </svg>`;
 
-    // 🧷 Render composite
-    const result = await sharp(templateBuffer)
+    // 🧷 Combine
+    const buffer = await sharp(imgBuffer)
       .composite([{ input: Buffer.from(svg), top: 0, left: 0 }])
       .png()
       .toBuffer();
 
-    // 🧩 Upload to tmpfiles.org
+    // ☁️ Upload to tmpfiles.org
     const tempPath = path.join("/tmp", `fragment_${Date.now()}.png`);
-    fs.writeFileSync(tempPath, result);
+    fs.writeFileSync(tempPath, buffer);
 
     const formData = new FormData();
     formData.append("file", fs.createReadStream(tempPath));
-
     const uploadRes = await fetch("https://tmpfiles.org/api/v1/upload", {
       method: "POST",
       body: formData,
       headers: formData.getHeaders(),
     });
-
     const uploadData = await uploadRes.json();
     fs.unlinkSync(tempPath);
 
@@ -135,7 +137,6 @@ export default async function handler(req, res) {
       image_url = `https://tmpfiles.org/dl/${parts[2]}/${parts[3]}`;
     }
 
-    // ✅ Output JSON
     return res.status(200).json({
       status: "OK",
       ...data,
