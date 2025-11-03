@@ -1,12 +1,17 @@
 import sharp from "sharp";
 import fs from "fs";
-import path from "path";
+import path, { dirname } from "path";
 import fetch from "node-fetch";
 import FormData from "form-data";
 import * as cheerio from "cheerio";
+import { fileURLToPath } from "url";
 
-const FONT_PATH = "OpenSans-Regular.ttf"; // local font file
-const TEMPLATE_URL = "https://i.ibb.co/qFW35Nn2/x.jpg"; // your base image
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+const FONT_PATH = path.join(__dirname, "../OpenSans-Regular.ttf"); // <-- fixed
+const TEMPLATE_URL = "https://i.ibb.co/qFW35Nn2/x.jpg";
+
 
 export default async function handler(req, res) {
   try {
