@@ -5,20 +5,27 @@ import fetch from "node-fetch";
 import FormData from "form-data";
 import * as cheerio from "cheerio";
 
-const FONT_PATH = "https://github.com/TryToLiveAlon/api-wrappe/blob/main/fonts/OpenSans-Regular.ttf";
-const TEMPLATE_PATH = "https://i.ibb.co/qFW35Nn2/x.jpg";
-
 export default async function handler(req, res) {
   try {
     const username = (req.query.username || "heartless").replace("@", "");
     const url = `https://fragment.com/username/${username}`;
+    const templateUrl = "https://i.ibb.co/qFW35Nn2/x.jpg";
+    const fontUrl = "https://raw.githubusercontent.com/TryToLiveAlon/api-wrappe/main/fonts/OpenSans-Regular.ttf";
 
-    // 1️⃣ Fetch HTML
-    const response = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
-    const html = await response.text();
+    // 🧠 Fetch and cache font
+    const fontResponse = await fetch(fontUrl);
+    const fontBuffer = await fontResponse.arrayBuffer();
+    const fontBase64 = Buffer.from(fontBuffer).toString("base64");
+
+    // 🧠 Fetch template image
+    const templateResponse = await fetch(templateUrl);
+    const templateBuffer = Buffer.from(await templateResponse.arrayBuffer());
+
+    // 🧠 Scrape Fragment
+    const pageResponse = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
+    const html = await pageResponse.text();
     const $ = cheerio.load(html);
 
-    // 2️⃣ Scrape data
     const data = {
       username: `@${username}`,
       current_high_bid: $(".table-cell-value").first().text().trim() || "Unknown",
@@ -26,10 +33,8 @@ export default async function handler(req, res) {
         $("time").attr("datetime") ||
         $(".js-timer-wrap time").attr("datetime") ||
         "Unknown",
-      web_address:
-        $("dt:contains('Web Address')").next("dd").text().trim() || "—",
-      ton_web3_address:
-        $("dt:contains('TON Web 3.0 Address')").next("dd").text().trim() || "—",
+      web_address: $("dt:contains('Web Address')").next("dd").text().trim() || "—",
+      ton_web3_address: $("dt:contains('TON Web 3.0 Address')").next("dd").text().trim() || "—",
       status: $(".tm-section-header-status").text().trim() || "Unknown",
       bid_history: [],
       source: url,
@@ -47,14 +52,15 @@ export default async function handler(req, res) {
       }
     });
 
-    // 3️⃣ Validate assets
-    if (!fs.existsSync(TEMPLATE_PATH)) throw new Error("template.png not found!");
-    if (!fs.existsSync(FONT_PATH)) throw new Error("Font not found: OpenSans-Regular.ttf");
+    const escapeXml = (t) =>
+      String(t)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&apos;");
 
-    const metadata = await sharp(TEMPLATE_PATH).metadata();
-    const fontBase64 = fs.readFileSync(FONT_PATH).toString("base64");
-
-    // 4️⃣ Text layout
+    // 🧩 SVG text layer
     const fields = [
       { x: 50, y: 90, text: data.ton_web3_address, color: "#ffffff", size: 32, weight: "600" },
       { x: 300, y: 80, text: data.status, color: "#5FE890", size: 23, weight: "600" },
@@ -64,12 +70,11 @@ export default async function handler(req, res) {
       { x: 1090, y: 270, text: data.ton_web3_address, color: "#22A9D8", size: 28, weight: "600" },
     ];
 
-    // Add top 3 bid lines
-    let yStart = 370;
-    data.bid_history.forEach((bid, i) => {
+    let y = 370;
+    for (const bid of data.bid_history) {
       fields.push({
         x: 70,
-        y: yStart + i * 60,
+        y,
         text: `${bid.price} — ${bid.from}`,
         color: "#FFD700",
         size: 22,
@@ -77,25 +82,17 @@ export default async function handler(req, res) {
       });
       fields.push({
         x: 70,
-        y: yStart + i * 60 + 25,
+        y: y + 25,
         text: bid.date,
         color: "#AAAAAA",
         size: 20,
         weight: "400",
       });
-    });
+      y += 60;
+    }
 
-    const escapeXml = (t) =>
-      String(t)
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&apos;");
-
-    // 5️⃣ SVG overlay (no external fonts)
-    const svgOverlay = `
-    <svg width="${metadata.width}" height="${metadata.height}" xmlns="http://www.w3.org/2000/svg">
+    const svg = `
+    <svg width="1400" height="800" xmlns="http://www.w3.org/2000/svg">
       <style>
         @font-face {
           font-family: 'OpenSans';
@@ -110,14 +107,15 @@ export default async function handler(req, res) {
         .join("\n")}
     </svg>`;
 
-    // 6️⃣ Compose and upload
-    const buffer = await sharp(TEMPLATE_PATH)
-      .composite([{ input: Buffer.from(svgOverlay), top: 0, left: 0 }])
+    // 🧷 Render composite
+    const result = await sharp(templateBuffer)
+      .composite([{ input: Buffer.from(svg), top: 0, left: 0 }])
       .png()
       .toBuffer();
 
+    // 🧩 Upload to tmpfiles.org
     const tempPath = path.join("/tmp", `fragment_${Date.now()}.png`);
-    fs.writeFileSync(tempPath, buffer);
+    fs.writeFileSync(tempPath, result);
 
     const formData = new FormData();
     formData.append("file", fs.createReadStream(tempPath));
@@ -127,6 +125,7 @@ export default async function handler(req, res) {
       body: formData,
       headers: formData.getHeaders(),
     });
+
     const uploadData = await uploadRes.json();
     fs.unlinkSync(tempPath);
 
@@ -136,7 +135,7 @@ export default async function handler(req, res) {
       image_url = `https://tmpfiles.org/dl/${parts[2]}/${parts[3]}`;
     }
 
-    // ✅ Final JSON
+    // ✅ Output JSON
     return res.status(200).json({
       status: "OK",
       ...data,
