@@ -5,7 +5,7 @@ import fetch from "node-fetch";
 import FormData from "form-data";
 import * as cheerio from "cheerio";
 
-const FONT_PATH = "./OpenSans-Regular.ttf"; // local font file
+const FONT_PATH = "OpenSans-Regular.ttf"; // local font file
 const TEMPLATE_URL = "https://i.ibb.co/qFW35Nn2/x.jpg"; // your base image
 
 export default async function handler(req, res) {
