@@ -11,8 +11,8 @@ export default async function handler(req, res) {
     const url = `https://fragment.com/username/${username}`;
     const baseImageUrl = "https://i.ibb.co/qFW35Nn2/x.jpg";
 
-    // --- Helper: Escape special chars for SVG ---
-    const escapeXML = (unsafe) =>
+    // Escape unsafe XML chars
+    const escapeXML = (unsafe = "") =>
       unsafe
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
@@ -20,12 +20,12 @@ export default async function handler(req, res) {
         .replace(/"/g, "&quot;")
         .replace(/'/g, "&apos;");
 
-    // 1️⃣ Fetch Fragment HTML
+    // 1️⃣ Fetch page
     const response = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
     const html = await response.text();
     const $ = cheerio.load(html);
 
-    // 2️⃣ Extract data
+    // 2️⃣ Scrape data
     const data = {
       username: `@${username}`,
       current_high_bid: $(".table-cell-value").first().text().trim() || "Not found",
@@ -53,24 +53,23 @@ export default async function handler(req, res) {
       }
     });
 
-    // 3️⃣ Load base and get size
+    // 3️⃣ Get image metadata
     const baseBuffer = await (await fetch(baseImageUrl)).arrayBuffer();
-    const baseMeta = await sharp(Buffer.from(baseBuffer)).metadata();
-    const { width, height } = baseMeta;
+    const meta = await sharp(Buffer.from(baseBuffer)).metadata();
+    const { width, height } = meta;
 
-    // 4️⃣ Build SVG safely with escaped text
+    // 4️⃣ Build SVG overlay (no @import — safe)
     const svg = `
     <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
       <style>
-        @import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&display=swap');
-        text { font-family: 'Open Sans', sans-serif; }
-        .username { font: 600 32px 'Open Sans'; fill: #ffffff; }
-        .status { font: 600 23px 'Open Sans'; fill: #5FE890; }
-        .bid { font: 700 24px 'Open Sans'; fill: #ffffff; }
-        .label { font: 700 28px 'Open Sans'; fill: #22A9D8; }
-        .bidHistory { font: 600 24px 'Open Sans'; fill: #FFD700; }
-        .bidFrom { font: 500 20px 'Open Sans'; fill: #AAAAAA; }
-        .footer { font: 400 22px 'Open Sans'; fill: #CCCCCC; }
+        text { font-family: 'DejaVu Sans', Arial, sans-serif; }
+        .username { font-weight: 600; font-size: 32px; fill: #ffffff; }
+        .status { font-weight: 600; font-size: 23px; fill: #5FE890; }
+        .bid { font-weight: 700; font-size: 24px; fill: #ffffff; }
+        .label { font-weight: 700; font-size: 28px; fill: #22A9D8; }
+        .bidHistory { font-weight: 600; font-size: 24px; fill: #FFD700; }
+        .bidFrom { font-weight: 500; font-size: 20px; fill: #AAAAAA; }
+        .footer { font-weight: 400; font-size: 22px; fill: #CCCCCC; }
       </style>
 
       <text x="50" y="90" class="username">${escapeXML(username)}.t.me</text>
@@ -96,16 +95,15 @@ export default async function handler(req, res) {
       </text>
     </svg>`;
 
-    // 5️⃣ Combine base + overlay
+    // 5️⃣ Composite image
     const buffer = await sharp(Buffer.from(baseBuffer))
       .composite([{ input: Buffer.from(svg), top: 0, left: 0 }])
       .jpeg()
       .toBuffer();
 
-    // 6️⃣ Save + upload
+    // 6️⃣ Upload to tmpfiles.org
     const tempPath = path.join("/tmp", `fragment_${Date.now()}.jpg`);
     fs.writeFileSync(tempPath, buffer);
-
     const formData = new FormData();
     formData.append("file", fs.createReadStream(tempPath));
     const uploadRes = await fetch("https://tmpfiles.org/api/v1/upload", {
@@ -122,7 +120,7 @@ export default async function handler(req, res) {
       image_url = `https://tmpfiles.org/dl/${parts[2]}/${parts[3]}`;
     }
 
-    // 7️⃣ Output JSON
+    // 7️⃣ Return response
     return res.status(200).json({
       status: "OK",
       ...data,
