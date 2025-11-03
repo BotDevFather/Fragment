@@ -1,128 +1,150 @@
-import fs from "fs";
-import path from "path";
-import fetch from "node-fetch";
-import FormData from "form-data";
+import axios from "axios";
 import * as cheerio from "cheerio";
-import { createCanvas, loadImage, registerFont } from "canvas";
-
-// 🧩 Font registration
-const FONT_PATH = path.resolve("./fonts/OpenSans-Regular.ttf");
-registerFont(FONT_PATH, { family: "OpenSans" });
-
-// 🖼 Template image
-const TEMPLATE_URL = "https://i.ibb.co/qFW35Nn2/x.jpg";
 
 export default async function handler(req, res) {
+  const { username } = req.query;
+  if (!username)
+    return res.status(400).json({ error: "Missing ?username= parameter" });
+
+  const url = `https://fragment.com/username/${username}`;
+
   try {
-    // 💬 Always filled username
-    const username = (req.query.username || "heartless").replace("@", "");
-    const url = `https://fragment.com/username/${username}`;
-
-    // 🧠 Fetch and load background image
-    const imgRes = await fetch(TEMPLATE_URL);
-    const imgBuffer = Buffer.from(await imgRes.arrayBuffer());
-    const template = await loadImage(imgBuffer);
-
-    const canvas = createCanvas(template.width, template.height);
-    const ctx = canvas.getContext("2d");
-
-    // Draw base image
-    ctx.drawImage(template, 0, 0, template.width, template.height);
-
-    // 🧠 Scrape data from Fragment
-    const pageResponse = await fetch(url, {
-      headers: { "User-Agent": "Mozilla/5.0" },
+    const { data: html } = await axios.get(url, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+      },
     });
-    const html = await pageResponse.text();
+
     const $ = cheerio.load(html);
 
     const data = {
-      username: `@${username}`,
-      current_high_bid: $(".table-cell-value").first().text().trim() || "Unknown",
-      auction_end:
-        $("time").attr("datetime") ||
-        $(".js-timer-wrap time").attr("datetime") ||
-        "Unknown",
-      web_address: $("dt:contains('Web Address')").next("dd").text().trim() || "—",
-      ton_web3_address:
-        $("dt:contains('TON Web 3.0 Address')").next("dd").text().trim() || "—",
-      status: $(".tm-section-header-status").text().trim() || "Unknown",
-      bid_history: [],
+      username: extractUsername($),
+      current_high_bid: extractHighBid($),
+      auction_end: extractAuctionEnd($),
+      web_address: extractWebAddress($),
+      ton_web3_address: extractTonWeb3Address($),
+      status: extractStatus($),
+      bid_history: extractBidHistory($),
       source: url,
       developer: "https://t.me/TryToLiveAlone",
     };
 
-    // 🧾 Extract bid history (first 3 entries)
-    $("table.tm-table tbody tr").each((i, el) => {
-      if (i < 3) {
-        const tds = $(el).find("td");
-        data.bid_history.push({
-          price: $(tds[0]).text().trim(),
-          date: $(tds[1]).text().trim(),
-          from: $(tds[2]).text().trim(),
+    res.status(200).json(data);
+  } catch (err) {
+    res.status(500).json({ error: "Scraping failed", details: err.message });
+  }
+}
+
+// --- Extraction Helpers ---
+
+function extractUsername($) {
+  try {
+    const elem = $("span.tm-section-header-domain");
+    if (elem.length) {
+      const subdomain = elem.find("span.subdomain");
+      if (subdomain.length) return `@${subdomain.text().trim()}`;
+    }
+    const h2 = $("h2").text();
+    const match = h2.match(/@(\w+)/);
+    if (match) return `@${match[1]}`;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function extractHighBid($) {
+  try {
+    const elem = $("div.table-cell-value").filter((_, el) =>
+      $(el).text().match(/\d/)
+    );
+    if (elem.length) return elem.first().text().trim();
+
+    const th = $("th").filter((_, el) =>
+      $(el).text().match(/Highest Bid/i)
+    );
+    if (th.length) {
+      const row = th.first().closest("tr");
+      const val = row.find("div.table-cell-value").text().trim();
+      if (val) return val;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function extractAuctionEnd($) {
+  try {
+    const timeElem = $("div.js-timer-wrap time[datetime]").attr("datetime");
+    if (timeElem) return timeElem;
+
+    const alt = $("div.tm-section-countdown time").attr("datetime");
+    return alt || null;
+  } catch {
+    return null;
+  }
+}
+
+function extractWebAddress($) {
+  try {
+    let result = null;
+    $("dl.tm-list-item").each((_, el) => {
+      const title = $(el).find("dt.tm-list-item-title").text();
+      if (title.includes("Web Address")) {
+        result = $(el).find("dd.tm-list-item-value").text().trim();
+      }
+    });
+    return result;
+  } catch {
+    return null;
+  }
+}
+
+function extractTonWeb3Address($) {
+  try {
+    let result = null;
+    $("dl.tm-list-item").each((_, el) => {
+      const title = $(el).find("dt.tm-list-item-title").text();
+      if (title.includes("TON Web 3.0 Address")) {
+        result = $(el).find("dd.tm-list-item-value").text().trim();
+      }
+    });
+    return result;
+  } catch {
+    return null;
+  }
+}
+
+function extractStatus($) {
+  try {
+    const elem = $("span.tm-section-header-status");
+    if (elem.length) return elem.text().trim();
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function extractBidHistory($) {
+  try {
+    const bids = [];
+    const rows = $("table.tm-table tbody tr").slice(0, 10);
+
+    rows.each((_, row) => {
+      const cells = $(row).find("td");
+      if (cells.length >= 3) {
+        bids.push({
+          price: $(cells[0]).text().trim(),
+          date: $(cells[1]).text().trim(),
+          from: $(cells[2]).text().trim(),
         });
       }
     });
 
-    // ✏️ Function to draw text
-    const drawText = (text, x, y, size, color, weight = "normal") => {
-      ctx.font = `${weight} ${size}px OpenSans`;
-      ctx.fillStyle = color;
-      ctx.fillText(text, x, y);
-    };
-
-    // 🧩 Draw main info
-    drawText(data.ton_web3_address, 50, 90, 32, "#ffffff", "600");
-    drawText(data.status, 300, 80, 23, "#5FE890", "600");
-    drawText(data.current_high_bid, 325, 280, 24, "#ffffff", "700");
-    drawText(username, 1950, 80, 28, "#22A9D8", "600");
-    drawText(data.web_address, 1055, 180, 28, "#22A9D8", "700");
-    drawText(data.ton_web3_address, 1055, 270, 28, "#22A9D8", "600");
-
-    // 📜 Draw bid history
-    let y = 370;
-    for (const bid of data.bid_history) {
-      drawText(`${bid.price} — ${bid.from}`, 70, y, 22, "#FFD700", "600");
-      drawText(bid.date, 70, y + 25, 20, "#AAAAAA", "400");
-      y += 60;
-    }
-
-    // 🧷 Export as PNG
-    const buffer = canvas.toBuffer("image/png");
-
-    // ☁️ Upload to tmpfiles.org
-    const tempPath = path.join("/tmp", `fragment_${Date.now()}.png`);
-    fs.writeFileSync(tempPath, buffer);
-
-    const formData = new FormData();
-    formData.append("file", fs.createReadStream(tempPath));
-
-    const uploadRes = await fetch("https://tmpfiles.org/api/v1/upload", {
-      method: "POST",
-      body: formData,
-      headers: formData.getHeaders(),
-    });
-
-    const uploadData = await uploadRes.json();
-    fs.unlinkSync(tempPath);
-
-    let image_url = null;
-    if (uploadData?.data?.url) {
-      image_url = uploadData.data.url.replace("tmpfiles.org/", "tmpfiles.org/dl/");
-    }
-
-    // ✅ Return success
-    return res.status(200).json({
-      status: "OK",
-      ...data,
-      image_url,
-    });
-  } catch (err) {
-    // ❌ Handle error
-    return res.status(500).json({
-      status: "ERROR",
-      message: err.message,
-      developer: "https://t.me/TryToLiveAlone",
-    });
+    return bids;
+  } catch {
+    return [];
   }
 }
